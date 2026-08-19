@@ -29,7 +29,7 @@
   button:disabled { opacity:.5; cursor:default; }
 
   #meta { position:fixed; left:18px; bottom:18px; z-index:10; background:var(--panel);
-    border:1px solid var(--border); border-radius:10px; padding:12px 16px; min-width:210px;
+    border:1px solid var(--border); border-radius:10px; padding:12px 16px; min-width:230px;
     font-size:13px; line-height:1.5; }
   #meta .u { font-size:15px; font-weight:700; }
   #meta .muted { color:var(--muted); }
@@ -44,9 +44,9 @@
 
   #statusbox { position:fixed; top:74px; left:50%; transform:translateX(-50%); z-index:20;
     background:#3d1d1d; border:1px solid #c6534c; color:#ffb4ab; padding:10px 16px;
-    border-radius:8px; font-size:14px; display:none; max-width:80%; }
+    border-radius:8px; font-size:14px; display:none; max-width:80%; text-align:center; }
   .hint { color:var(--muted); font-size:12px; }
-  @media (max-width:700px){ .hint{ display:none; } #meta{ min-width:160px; } }
+  @media (max-width:700px){ .hint{ display:none; } #meta{ min-width:170px; } }
 </style>
 </head>
 <body>
@@ -85,10 +85,10 @@
   const LEVELS = ["#272c34", "#0e4429", "#006d32", "#26a641", "#39d353"];
   const COLORS = LEVELS.map((c) => new THREE.Color(c));
 
+  // ---- scene setup ----
   const scene = new THREE.Scene();
   scene.background = new THREE.Color("#0d1117");
-
-  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   document.getElementById("scene").appendChild(renderer.domElement);
 
@@ -101,10 +101,10 @@
   const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(1, 2, 1); scene.add(key);
   const fill = new THREE.DirectionalLight(0x88b0ff, 0.35); fill.position.set(-1, 0.5, -1); scene.add(fill);
 
-  const grid = new THREE.GridHelper(40, 40, 0x30363d, 0x21262d);
+  const grid = new THREE.GridHelper(200, 100, 0x30363d, 0x21262d);
   scene.add(grid);
   const base = new THREE.Mesh(
-    new THREE.PlaneGeometry(40, 40),
+    new THREE.PlaneGeometry(200, 200),
     new THREE.MeshBasicMaterial({ color: 0x0d1117, transparent: true, opacity: 0.6 })
   );
   base.rotation.x = -Math.PI / 2; base.position.y = -0.05; scene.add(base);
@@ -127,14 +127,41 @@
   addEventListener("resize", resize);
   resize();
 
+  // ---- build a GitHub-style calendar grid for a list of chronological days ----
+  function layoutDays(days) {
+    // returns array of { date, count, x, z } laid out as year blocks (oldest left)
+    const spacing = 1.0;
+    const weeksPerBlock = 54; // 53 weeks + 1 gap between years
+    let yearOffset = 0;
+    const placed = [];
+    for (let i = 0; i < days.length; ) {
+      const y = parseInt(days[i].date.slice(0, 4), 10);
+      const firstDow = new Date(y, 0, 1).getDay();
+      const j = i;
+      while (j < days.length && parseInt(days[j].date.slice(0, 4), 10) === y && j - i < 370) j++;
+      for (let k = i; k < j; k++) {
+        const d = days[k];
+        const date = new Date(d.date + "T00:00:00");
+        const doy = Math.floor((date - new Date(y, 0, 1)) / 86400000);
+        const col = Math.floor((doy + firstDow) / 7);
+        const row = date.getDay(); // 0 Sun ... 6 Sat (Sun on top)
+        placed.push({ date: d.date, count: d.count, x: (yearOffset + col) * spacing, z: (row - 3) * spacing });
+      }
+      yearOffset += weeksPerBlock;
+      i = j;
+    }
+    return placed;
+  }
+
   function renderGraph(data) {
     barGroup.clear();
     barMeshes = [];
     daysData = [];
 
-    const { days, max } = data;
-    const colSpacing = 1.0, rowSpacing = 1.0, barW = 0.84, barD = 0.84, maxH = 6;
-    const N = days.length;
+    const placed = layoutDays(data.days);
+    const max = Math.max(...placed.map((p) => p.count), 1);
+    const maxH = 6, barW = 0.84, barD = 0.84;
+    const N = placed.length;
     const geom = new THREE.BoxGeometry(barW, 1, barD);
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.08 });
     const bars = new THREE.InstancedMesh(geom, mat, N);
@@ -142,52 +169,45 @@
     const dummy = new THREE.Object3D();
     const colorArr = new Float32Array(N * 3);
     const colorObj = new THREE.Color();
-    const centers = [];
+
+    // center the whole field on the origin
+    const xs = placed.map((p) => p.x);
+    const cx0 = (Math.min(...xs) + Math.max(...xs)) / 2;
 
     for (let i = 0; i < N; i++) {
-      const d = days[i];
-      const date = new Date(d.date + "T00:00:00");
-      const y = date.getFullYear();
-      const dayOfYear = Math.floor((date - new Date(y, 0, 1)) / 86400000);
-      const firstDayOffset = new Date(y, 0, 1).getDay();
-      const row = date.getDay();                                  // 0 Sun .. 6 Sat
-      const col = Math.floor((dayOfYear + firstDayOffset) / 7);   // week column
-      const cx = (col - 26) * colSpacing;
-      const cz = (row - 3) * rowSpacing;
-
-      const t = max > 0 ? d.count / max : 0;
-      const h = d.count > 0 ? Math.max(0.15, t * maxH) : 0.08;
-      dummy.position.set(cx, h / 2, cz);
+      const p = placed[i];
+      const h = p.count > 0 ? Math.max(0.15, (p.count / max) * maxH) : 0.08;
+      dummy.position.set(p.x - cx0, h / 2, p.z);
       dummy.scale.set(1, h, 1);
       dummy.updateMatrix();
       bars.setMatrixAt(i, dummy.matrix);
-
-      centers.push({ x: cx, z: cz, y: h });
-
-      const lvl = d.count <= 0 ? 0 : d.count >= max ? 4 : Math.max(1, Math.round((d.count / max) * 4));
+      const lvl = p.count <= 0 ? 0 : p.count >= max ? 4 : Math.max(1, Math.round((p.count / max) * 4));
       colorObj.set(COLORS[lvl]);
       colorArr[i * 3] = colorObj.r;
       colorArr[i * 3 + 1] = colorObj.g;
       colorArr[i * 3 + 2] = colorObj.b;
+      daysData.push({ date: p.date, count: p.count });
     }
     bars.instanceColor = new THREE.InstancedBufferAttribute(colorArr, 3);
     barGroup.add(bars);
     barMeshes = [bars];
-    daysData = days.map((d) => ({ ...d }));
 
-    camera.position.set(0, 9, 32);
+    const width = Math.max(xs) - Math.min(xs);
+    camera.position.set(0, 6 + width * 0.4, 14 + width * 0.7);
     controls.target.set(0, 1, 0);
     controls.update();
 
+    const total = data.days.reduce((s, d) => s + d.count, 0);
+    const busy = data.days.filter((d) => d.count > 0).length;
+    const years = new Set(data.days.map((d) => d.date.slice(0, 4))).size;
     document.getElementById("metaUser").textContent = data.user;
-    document.getElementById("metaDates").textContent = days.length
-      ? `${days[0].date} → ${days[days.length - 1].date}` : "no data";
-    const total = days.reduce((s, d) => s + d.count, 0);
-    const busy = days.filter((d) => d.count > 0).length;
+    document.getElementById("metaDates").textContent = data.days.length
+      ? `${data.days[0].date} → ${data.days[data.days.length - 1].date}` : "no data";
     document.getElementById("metaSummary").textContent =
-      `${total} total contributions · ${busy} active days`;
+      `${years} year${years === 1 ? "" : "s"} · ${total} contributions · ${busy} active days`;
   }
 
+  // ---- hover readout ----
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
   renderer.domElement.addEventListener("pointermove", (e) => {
@@ -201,18 +221,29 @@
       tooltip.style.left = e.clientX + "px";
       tooltip.style.top = e.clientY + "px";
       tooltip.innerHTML = `<b>${d.date}</b> · ${d.count} contribution${d.count === 1 ? "" : "s"}`;
-    } else {
-      tooltip.style.display = "none";
-    }
+    } else tooltip.style.display = "none";
   });
 
+  // legend
   const lc = document.getElementById("legendCells");
   LEVELS.forEach((c) => {
     const div = document.createElement("div");
-    div.className = "cell";
-    div.style.background = c;
-    lc.appendChild(div);
+    div.className = "cell"; div.style.background = c; lc.appendChild(div);
   });
+
+  // ---- data source: client-side (works on static hosts), no token needed ----
+  async function fetchContributions(username) {
+    // Primary: jogruber's public GitHub-contributions mirror (CORS enabled)
+    const url = `https://github-contributions-api.jogruber.de/v4/${encodeURIComponent(username)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (res.status === 404) throw new Error(`GitHub user "${username}" not found`);
+    if (!res.ok) throw new Error(`Contribution API error (${res.status})`);
+    const json = await res.json();
+    const days = (json.contributions || [])
+      .map((c) => ({ date: c.date, count: c.count || 0 }))
+      .sort((a, b) => (a.date < b.date ? -1 : 1)); // oldest → newest
+    return { user: username, days, max: days.reduce((m, d) => Math.max(m, d.count), 0) };
+  }
 
   async function load(user) {
     const btn = document.getElementById("go");
@@ -222,10 +253,7 @@
     const q = document.getElementById("q");
     if (q.value !== user) q.value = user;
     try {
-      const res = await fetch("/api/three/" + encodeURIComponent(user));
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Request failed");
-      renderGraph(data);
+      renderGraph(await fetchContributions(user));
     } catch (e) {
       status.textContent = e.message;
       status.style.display = "block";
