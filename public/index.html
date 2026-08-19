@@ -101,10 +101,10 @@
   const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(1, 2, 1); scene.add(key);
   const fill = new THREE.DirectionalLight(0x88b0ff, 0.35); fill.position.set(-1, 0.5, -1); scene.add(fill);
 
-  const grid = new THREE.GridHelper(200, 100, 0x30363d, 0x21262d);
+  const grid = new THREE.GridHelper(500, 100, 0x30363d, 0x21262d);
   scene.add(grid);
   const base = new THREE.Mesh(
-    new THREE.PlaneGeometry(200, 200),
+    new THREE.PlaneGeometry(500, 500),
     new THREE.MeshBasicMaterial({ color: 0x0d1117, transparent: true, opacity: 0.6 })
   );
   base.rotation.x = -Math.PI / 2; base.position.y = -0.05; scene.add(base);
@@ -128,26 +128,37 @@
   resize();
 
   // ---- build a GitHub-style calendar grid for a list of chronological days ----
+  // Years are laid out as blocks in a compact multi-row grid (oldest first) so the
+  // whole history frames well instead of forming one impractically wide ribbon.
   function layoutDays(days) {
-    // returns array of { date, count, x, z } laid out as year blocks (oldest left)
     const spacing = 1.0;
-    const weeksPerBlock = 54; // 53 weeks + 1 gap between years
-    let yearOffset = 0;
+    const weeksPerBlock = 54; // 53 weeks + a gap before the next year block
+    const perRow = 4;
+    const rowGap = 7;
     const placed = [];
-    for (let i = 0; i < days.length; ) {
+    let i = 0;
+    let block = 0;
+    while (i < days.length) {
       const y = parseInt(days[i].date.slice(0, 4), 10);
       const firstDow = new Date(y, 0, 1).getDay();
-      const j = i;
+      let j = i;
       while (j < days.length && parseInt(days[j].date.slice(0, 4), 10) === y && j - i < 370) j++;
+      const colOffset = (block % perRow) * weeksPerBlock;
+      const zOffset = Math.floor(block / perRow) * rowGap;
       for (let k = i; k < j; k++) {
         const d = days[k];
         const date = new Date(d.date + "T00:00:00");
         const doy = Math.floor((date - new Date(y, 0, 1)) / 86400000);
         const col = Math.floor((doy + firstDow) / 7);
         const row = date.getDay(); // 0 Sun ... 6 Sat (Sun on top)
-        placed.push({ date: d.date, count: d.count, x: (yearOffset + col) * spacing, z: (row - 3) * spacing });
+        placed.push({
+          date: d.date,
+          count: d.count,
+          x: (colOffset + col) * spacing,
+          z: zOffset + (row - 3) * spacing,
+        });
       }
-      yearOffset += weeksPerBlock;
+      block++;
       i = j;
     }
     return placed;
@@ -192,9 +203,17 @@
     barGroup.add(bars);
     barMeshes = [bars];
 
-    const width = Math.max(xs) - Math.min(xs);
-    camera.position.set(0, 6 + width * 0.4, 14 + width * 0.7);
-    controls.target.set(0, 1, 0);
+    // frame the whole field, keeping bars big enough to read
+    const xr = placed.map((p) => p.x);
+    const zr = placed.map((p) => p.z);
+    const x0 = Math.min(...xr), x1 = Math.max(...xr);
+    const z0 = Math.min(...zr), z1 = Math.max(...zr);
+    const fcx = (x0 + x1) / 2, fcz = (z0 + z1) / 2;
+    const size = Math.max(x1 - x0, z1 - z0, 8);
+    const afov = (25 * Math.PI) / 180;
+    const dist = (size / 2 + 6) / (Math.tan(afov) * (innerWidth / innerHeight)) * 1.35;
+    camera.position.set(fcx, dist * 0.5, fcz + dist);
+    controls.target.set(fcx, 1.5, fcz);
     controls.update();
 
     const total = data.days.reduce((s, d) => s + d.count, 0);
@@ -270,8 +289,9 @@
     if (e.key === "Enter") { const v = e.target.value.trim(); if (v) load(v); }
   });
 
-  // start with a fun default
-  load("sudo-rm-rf");
+  // start with a fun default (override with ?u=username)
+  const initialUser = new URLSearchParams(location.search).get("u") || "sudo-rm-rf";
+  load(initialUser);
   </script>
 </body>
 </html>
