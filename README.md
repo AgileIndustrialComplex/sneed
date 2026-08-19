@@ -13,7 +13,7 @@ heatmap.
 - 🖱️ **Orbit + zoom** — drag to rotate, scroll to zoom, damped smoothness
 - 🔍 **Hover** — point at a bar to see the exact date and contribution count
 - 🎨 **GitHub-accurate colors** — the classic 5-level green scale
-- 📅 **Entire history** — every year of activity, laid out as consecutive calendar-year blocks
+- 📅 **Entire history** — every year of activity rendered as **one continuous left→right timeline** (weeks flow for the whole account, Sunday on top)
 - ⚡ **100% static, no token** — data comes straight from the client
 
 ## Try it
@@ -25,8 +25,8 @@ Type a GitHub username and hit **View in 3D** — e.g. `sudo-rm-rf`, `gaearon`, 
 ## How it works
 
 - Pure static page (`public/index.html`): [Three.js](https://threejs.org) renders each
-  day as an instanced box in a GitHub-style calendar grid (weeks × days, ordered by
-  year, Sunday on top), with `OrbitControls` for orbit/zoom and a raycast hover readout.
+  day as an instanced box on a single continuous timeline (weeks left→right, Sunday on
+  top, all years in order), with `OrbitControls` for orbit/zoom and a raycast hover readout.
 - Contribution data is fetched client-side from the
   [jogruber GitHub-contributions mirror](https://github.com/jogruber/github-contributions-api)
   (CORS-enabled, no API token needed).
