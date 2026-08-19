@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>sneed — GitHub contribution graph in 3D</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3; --muted:#8b949e; --green:#39d353; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:'Segoe UI',system-ui,-apple-system,sans-serif; overflow:hidden; }
+  #scene { position:absolute; inset:0; }
+
+  #bar { position:fixed; top:0; left:0; right:0; z-index:10;
+    display:flex; align-items:center; gap:12px; padding:14px 18px;
+    background:rgba(13,17,23,.92); backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  #bar h1 { font-size:18px; margin:0; font-weight:700; letter-spacing:.3px; }
+  #bar h1 span { color:var(--green); }
+  #search { display:flex; gap:8px; margin-left:auto; }
+  input[type=text] {
+    background:var(--panel); border:1px solid var(--border); color:var(--text);
+    border-radius:6px; padding:8px 12px; font-size:14px; outline:none; width:220px; }
+  input[type=text]:focus { border-color:var(--green); }
+  button {
+    background:#238636; border:none; color:#fff; font-weight:600; font-size:14px;
+    padding:8px 16px; border-radius:6px; cursor:pointer; }
+  button:hover { background:#2ea043; }
+  button:disabled { opacity:.5; cursor:default; }
+
+  #meta { position:fixed; left:18px; bottom:18px; z-index:10; background:var(--panel);
+    border:1px solid var(--border); border-radius:10px; padding:12px 16px; min-width:210px;
+    font-size:13px; line-height:1.5; }
+  #meta .u { font-size:15px; font-weight:700; }
+  #meta .muted { color:var(--muted); }
+  #tooltip { position:fixed; z-index:10; pointer-events:none; display:none;
+    background:rgba(22,27,34,.95); border:1px solid var(--border); border-radius:8px;
+    padding:8px 12px; font-size:13px; transform:translate(-50%,-130%); white-space:nowrap; }
+
+  #legend { position:fixed; right:18px; bottom:18px; z-index:10; background:var(--panel);
+    border:1px solid var(--border); border-radius:10px; padding:10px 14px; font-size:12px; color:var(--muted); }
+  #legend .cells { display:flex; gap:4px; margin-top:6px; }
+  .cell { width:14px; height:14px; border-radius:3px; }
+
+  #statusbox { position:fixed; top:74px; left:50%; transform:translateX(-50%); z-index:20;
+    background:#3d1d1d; border:1px solid #c6534c; color:#ffb4ab; padding:10px 16px;
+    border-radius:8px; font-size:14px; display:none; max-width:80%; }
+  .hint { color:var(--muted); font-size:12px; }
+  @media (max-width:700px){ .hint{ display:none; } #meta{ min-width:160px; } }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <h1><span>sneed</span> · contribution graph in 3D</h1>
+    <div id="search">
+      <input type="text" id="q" placeholder="GitHub username…" autocomplete="off" spellcheck="false" />
+      <button id="go">View in 3D</button>
+    </div>
+    <span class="hint">drag to rotate · scroll to zoom · hover for details</span>
+  </div>
+
+  <div id="scene"></div>
+  <div id="statusbox"></div>
+  <div id="meta">
+    <div class="u" id="metaUser">—</div>
+    <div class="muted" id="metaDates"></div>
+    <div class="muted" id="metaSummary"></div>
+  </div>
+  <div id="legend">activity<div class="cells" id="legendCells"></div></div>
+  <div id="tooltip"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+  import * as THREE from "three";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+  const LEVELS = ["#272c34", "#0e4429", "#006d32", "#26a641", "#39d353"];
+  const COLORS = LEVELS.map((c) => new THREE.Color(c));
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color("#0d1117");
+
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  document.getElementById("scene").appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.maxPolarAngle = Math.PI / 2.05;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x0d1117, 0.9));
+  const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(1, 2, 1); scene.add(key);
+  const fill = new THREE.DirectionalLight(0x88b0ff, 0.35); fill.position.set(-1, 0.5, -1); scene.add(fill);
+
+  const grid = new THREE.GridHelper(40, 40, 0x30363d, 0x21262d);
+  scene.add(grid);
+  const base = new THREE.Mesh(
+    new THREE.PlaneGeometry(40, 40),
+    new THREE.MeshBasicMaterial({ color: 0x0d1117, transparent: true, opacity: 0.6 })
+  );
+  base.rotation.x = -Math.PI / 2; base.position.y = -0.05; scene.add(base);
+
+  const barGroup = new THREE.Group();
+  scene.add(barGroup);
+
+  let barMeshes = [];
+  let daysData = [];
+  const tooltip = document.getElementById("tooltip");
+
+  renderer.setAnimationLoop(animate);
+  function animate() { controls.update(); renderer.render(scene, camera); }
+
+  function resize() {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  }
+  addEventListener("resize", resize);
+  resize();
+
+  function renderGraph(data) {
+    barGroup.clear();
+    barMeshes = [];
+    daysData = [];
+
+    const { days, max } = data;
+    const colSpacing = 1.0, rowSpacing = 1.0, barW = 0.84, barD = 0.84, maxH = 6;
+    const N = days.length;
+    const geom = new THREE.BoxGeometry(barW, 1, barD);
+    const mat = new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.08 });
+    const bars = new THREE.InstancedMesh(geom, mat, N);
+    bars.count = N;
+    const dummy = new THREE.Object3D();
+    const colorArr = new Float32Array(N * 3);
+    const colorObj = new THREE.Color();
+    const centers = [];
+
+    for (let i = 0; i < N; i++) {
+      const d = days[i];
+      const date = new Date(d.date + "T00:00:00");
+      const y = date.getFullYear();
+      const dayOfYear = Math.floor((date - new Date(y, 0, 1)) / 86400000);
+      const firstDayOffset = new Date(y, 0, 1).getDay();
+      const row = date.getDay();                                  // 0 Sun .. 6 Sat
+      const col = Math.floor((dayOfYear + firstDayOffset) / 7);   // week column
+      const cx = (col - 26) * colSpacing;
+      const cz = (row - 3) * rowSpacing;
+
+      const t = max > 0 ? d.count / max : 0;
+      const h = d.count > 0 ? Math.max(0.15, t * maxH) : 0.08;
+      dummy.position.set(cx, h / 2, cz);
+      dummy.scale.set(1, h, 1);
+      dummy.updateMatrix();
+      bars.setMatrixAt(i, dummy.matrix);
+
+      centers.push({ x: cx, z: cz, y: h });
+
+      const lvl = d.count <= 0 ? 0 : d.count >= max ? 4 : Math.max(1, Math.round((d.count / max) * 4));
+      colorObj.set(COLORS[lvl]);
+      colorArr[i * 3] = colorObj.r;
+      colorArr[i * 3 + 1] = colorObj.g;
+      colorArr[i * 3 + 2] = colorObj.b;
+    }
+    bars.instanceColor = new THREE.InstancedBufferAttribute(colorArr, 3);
+    barGroup.add(bars);
+    barMeshes = [bars];
+    daysData = days.map((d) => ({ ...d }));
+
+    camera.position.set(0, 9, 32);
+    controls.target.set(0, 1, 0);
+    controls.update();
+
+    document.getElementById("metaUser").textContent = data.user;
+    document.getElementById("metaDates").textContent = days.length
+      ? `${days[0].date} → ${days[days.length - 1].date}` : "no data";
+    const total = days.reduce((s, d) => s + d.count, 0);
+    const busy = days.filter((d) => d.count > 0).length;
+    document.getElementById("metaSummary").textContent =
+      `${total} total contributions · ${busy} active days`;
+  }
+
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  renderer.domElement.addEventListener("pointermove", (e) => {
+    ndc.x = (e.clientX / innerWidth) * 2 - 1;
+    ndc.y = -(e.clientY / innerHeight) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(barMeshes, false);
+    if (hits.length && hits[0].instanceId != null) {
+      const d = daysData[hits[0].instanceId];
+      tooltip.style.display = "block";
+      tooltip.style.left = e.clientX + "px";
+      tooltip.style.top = e.clientY + "px";
+      tooltip.innerHTML = `<b>${d.date}</b> · ${d.count} contribution${d.count === 1 ? "" : "s"}`;
+    } else {
+      tooltip.style.display = "none";
+    }
+  });
+
+  const lc = document.getElementById("legendCells");
+  LEVELS.forEach((c) => {
+    const div = document.createElement("div");
+    div.className = "cell";
+    div.style.background = c;
+    lc.appendChild(div);
+  });
+
+  async function load(user) {
+    const btn = document.getElementById("go");
+    btn.disabled = true;
+    const status = document.getElementById("statusbox");
+    status.style.display = "none";
+    const q = document.getElementById("q");
+    if (q.value !== user) q.value = user;
+    try {
+      const res = await fetch("/api/three/" + encodeURIComponent(user));
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Request failed");
+      renderGraph(data);
+    } catch (e) {
+      status.textContent = e.message;
+      status.style.display = "block";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("go").addEventListener("click", () => {
+    const v = document.getElementById("q").value.trim();
+    if (v) load(v);
+  });
+  document.getElementById("q").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { const v = e.target.value.trim(); if (v) load(v); }
+  });
+
+  // start with a fun default
+  load("sudo-rm-rf");
+  </script>
+</body>
+</html>
