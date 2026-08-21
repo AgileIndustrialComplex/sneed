@@ -59,7 +59,7 @@
       <input type="text" id="q" placeholder="GitHub username…" autocomplete="off" spellcheck="false" />
       <button id="go">View in 3D</button>
     </div>
-    <span class="hint">drag to rotate · scroll to zoom · w/a/s/d or arrows to move · cursor steers · hover for details · +/− speed</span>
+    <span class="hint">drag to rotate · scroll to zoom · w/a/s/d or arrows to move · shift/space down/up · cursor steers (inverted, edge keeps turning) · hover for details · +/− speed</span>
     <div id="speed" title="Keyboard movement speed">
       <label>speed</label>
       <input type="range" id="speedRange" min="5" max="200" value="20" />
@@ -140,20 +140,24 @@
   // brought to the center of the screen (true "camera follows the mouse" — no button),
   // and the camera glides in the WASD/arrow direction. On release we re-anchor the
   // orbit pivot at the new vantage point so drag/scroll continue seamlessly.
-  const MOVE_KEYS = new Set(["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+  const MOVE_KEYS = new Set(["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Shift"]);
   let held = new Set();
   let mouseNdc = { x: 0, y: 0 }; // last pointer position in -1..1 screen space
   let fwd = new THREE.Vector3(0, 0, -1);   // current view direction (unit)
   let yawCur = 0, pitchCur = 0;            // eased heading, in radians
   let yawRef = 0, pitchRef = 0;            // heading captured when this press started
   let steeringRef = false;                 // reference captured this press yet?
+  let steerX = 0, steerY = 0;             // persistent steering offsets (screen-units, may exceed ±1 at the edge)
   const steerPos = new THREE.Vector3();
   const steerHor = new THREE.Vector3();
   const steerRight = new THREE.Vector3();
   const WORLD_UP = new THREE.Vector3(0, 1, 0);
-  const EASE = 0.18;   // how quickly the view chases the cursor
+  const EASE = 0.18;   // how quickly the view chases the cursor while it's inside the screen
+  const EDGE_SENS = 0.02;  // how fast the view turns while pinned to an edge (radians/frame → ~1.2 rad/s)
+  const EDGE = 0.9;        // pointer this close to the viewport edge counts as "at the edge"
   const MIN_PITCH = -0.5;          // look-down floor (radians); default framing already ~ -0.4
   const MAX_PITCH = Math.PI / 2 - 0.05; // never tilt past straight up/overhead
+  const INVERT_Y = true;           // cursor up looks down, cursor down looks up (flight / yoke style)
   let moveSpeed = 0.2;             // × multiplier on the base keyboard travel speed (0.02 of orbit distance/frame)
   const speedRange = document.getElementById("speedRange");
   const speedVal = document.getElementById("speedVal");
@@ -176,7 +180,7 @@
   }
 
   function kbMove() {
-    if (held.size === 0) { steeringRef = false; return; }
+    if (held.size === 0) { steeringRef = false; steerX = 0; steerY = 0; return; }
 
     // capture the initial heading once when this key-press starts
     if (!steeringRef) {
@@ -188,14 +192,25 @@
       steeringRef = true;
     }
 
-    // target heading = starting heading + the angular offset of the cursor from center,
-    // so the point under the pointer is pulled to the middle of the screen
+    // --- steer toward the cursor, but keep turning once the pointer pins an edge ---
+    // steerX/steerY are the desired heading offsets in radians, so they can grow without
+    // bound while the cursor is held against an edge -> the view keeps rotating instead
+    // of freezing when the pointer saturates to the viewport border.
     const tanH = Math.tan((camera.fov / 2) * Math.PI / 180);
     const aspect = innerWidth / innerHeight;
-    const tYaw = yawRef + Math.atan(tanH * aspect * mouseNdc.x);
-    const tPitch = Math.min(MAX_PITCH, Math.max(MIN_PITCH, pitchRef + Math.atan(tanH * mouseNdc.y)));
+    const targetAngX = Math.atan(tanH * aspect * mouseNdc.x);   // pointer's angular offset from center
+    const targetAngY = Math.atan(tanH * mouseNdc.y);
+    if (mouseNdc.x > EDGE) steerX += EDGE_SENS;
+    else if (mouseNdc.x < -EDGE) steerX -= EDGE_SENS;
+    else steerX += (targetAngX - steerX) * EASE;
+    if (mouseNdc.y > EDGE) steerY += EDGE_SENS;
+    else if (mouseNdc.y < -EDGE) steerY -= EDGE_SENS;
+    else steerY += (targetAngY - steerY) * EASE;
+
+    const tYaw = yawRef + steerX;
+    const tPitch = pitchRef + (INVERT_Y ? -steerY : steerY);
     yawCur += (tYaw - yawCur) * EASE;
-    pitchCur += (tPitch - pitchCur) * EASE;
+    pitchCur += (Math.min(MAX_PITCH, Math.max(MIN_PITCH, tPitch)) - pitchCur) * EASE;
     fwd.copy(headingToDir(yawCur, pitchCur));
 
     // movement basis: forward projected flat, and its horizontal right
@@ -204,15 +219,18 @@
     steerRight.crossVectors(steerHor, WORLD_UP);
 
     const step = camera.position.distanceTo(controls.target) * 0.02 * moveSpeed;
-    let vf = 0, vr = 0;
+    let vf = 0, vr = 0, vUp = 0;
     if (held.has("w") || held.has("ArrowUp")) vf += 1;
     if (held.has("s") || held.has("ArrowDown")) vf -= 1;
     if (held.has("d") || held.has("ArrowRight")) vr += 1;
     if (held.has("a") || held.has("ArrowLeft")) vr -= 1;
+    if (held.has(" ")) vUp += 1;         // Space: move up
+    if (held.has("Shift")) vUp -= 1;     // Shift: move down
     const rOld = controls.target.distanceTo(camera.position);
     steerPos.copy(camera.position)
       .addScaledVector(steerHor, vf * step)
       .addScaledVector(steerRight, vr * step);
+    steerPos.y += vUp * step;
     camera.position.copy(steerPos);
     // keep the orbit distance and aim the pivot along the (steered) heading
     controls.target.copy(camera.position).addScaledVector(fwd, Math.max(rOld, 0.01));
