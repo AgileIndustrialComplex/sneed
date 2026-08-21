@@ -56,7 +56,7 @@
       <input type="text" id="q" placeholder="GitHub username…" autocomplete="off" spellcheck="false" />
       <button id="go">View in 3D</button>
     </div>
-    <span class="hint">drag to rotate · scroll to zoom · w/a/s/d or arrows to move · hover for details</span>
+    <span class="hint">drag to rotate · scroll to zoom · w/a/s/d or arrows to move · cursor steers while moving · hover for details</span>
   </div>
 
   <div id="scene"></div>
@@ -117,7 +117,7 @@
   const tooltip = document.getElementById("tooltip");
 
   renderer.setAnimationLoop(animate);
-  function animate() { kbPan(); controls.update(); renderer.render(scene, camera); }
+  function animate() { kbMove(); controls.update(); renderer.render(scene, camera); }
 
   function resize() {
     camera.aspect = innerWidth / innerHeight;
@@ -127,33 +127,72 @@
   addEventListener("resize", resize);
   resize();
 
-  // ---- keyboard camera panning (WASD + arrow keys) ----
-  // OrbitControls re-derives camera.position = target + offset on every update(), so
-  // the orbit target is what actually moves the camera. Translating it keeps the spin
-  // and distance intact while the view slides along the horizontal plane.
+  // ---- keyboard camera controls (WASD + arrow keys, cursor steering) ----
+  // While a move key is held: the view turns so whatever sits under the pointer is
+  // brought to the center of the screen (true "camera follows the mouse" — no button),
+  // and the camera glides in the WASD/arrow direction. On release we re-anchor the
+  // orbit pivot at the new vantage point so drag/scroll continue seamlessly.
   const MOVE_KEYS = new Set(["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
   let held = new Set();
-  const panRight = new THREE.Vector3();
-  const panFwd = new THREE.Vector3();
-  const panTotal = new THREE.Vector3();
+  let mouseNdc = { x: 0, y: 0 }; // last pointer position in -1..1 screen space
+  let fwd = new THREE.Vector3(0, 0, -1);   // current view direction (unit)
+  let yawCur = 0, pitchCur = 0;            // eased heading, in radians
+  let yawRef = 0, pitchRef = 0;            // heading captured when this press started
+  let steeringRef = false;                 // reference captured this press yet?
+  const steerPos = new THREE.Vector3();
+  const steerHor = new THREE.Vector3();
+  const steerRight = new THREE.Vector3();
+  const WORLD_UP = new THREE.Vector3(0, 1, 0);
+  const EASE = 0.18;   // how quickly the view chases the cursor
+  const MIN_PITCH = -0.5;          // look-down floor (radians); default framing already ~ -0.4
+  const MAX_PITCH = Math.PI / 2 - 0.05; // never tilt past straight up/overhead
 
-  function kbPan() {
-    if (held.size === 0) return;
-    // horizontal direction the camera is looking at (toward its target)
-    panFwd.copy(controls.target).sub(camera.position).setY(0);
-    if (panFwd.length() < 1e-6) return; // looking straight down; nothing to slide along
-    panFwd.normalize();
-    panRight.crossVectors(panFwd, new THREE.Vector3(0, 1, 0)); // perpendicular, horizontal
+  function headingToDir(yaw, pitch) {
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch);
+    return new THREE.Vector3(cp * sy, Math.sin(pitch), cp * cy);
+  }
+
+  function kbMove() {
+    if (held.size === 0) { steeringRef = false; return; }
+
+    // capture the initial heading once when this key-press starts
+    if (!steeringRef) {
+      fwd.copy(controls.target).sub(camera.position).normalize();
+      const h = Math.hypot(fwd.x, fwd.z);
+      pitchCur = Math.atan2(fwd.y, h);
+      yawCur = Math.atan2(fwd.x, fwd.z);
+      yawRef = yawCur; pitchRef = pitchCur;
+      steeringRef = true;
+    }
+
+    // target heading = starting heading + the angular offset of the cursor from center,
+    // so the point under the pointer is pulled to the middle of the screen
+    const tanH = Math.tan((camera.fov / 2) * Math.PI / 180);
+    const aspect = innerWidth / innerHeight;
+    const tYaw = yawRef + Math.atan(tanH * aspect * mouseNdc.x);
+    const tPitch = Math.min(MAX_PITCH, Math.max(MIN_PITCH, pitchRef + Math.atan(tanH * mouseNdc.y)));
+    yawCur += (tYaw - yawCur) * EASE;
+    pitchCur += (tPitch - pitchCur) * EASE;
+    fwd.copy(headingToDir(yawCur, pitchCur));
+
+    // movement basis: forward projected flat, and its horizontal right
+    steerHor.copy(fwd); steerHor.y = 0;
+    if (steerHor.lengthSq() < 1e-10) steerHor.set(0, 0, -1); else steerHor.normalize();
+    steerRight.crossVectors(steerHor, WORLD_UP);
+
     const step = camera.position.distanceTo(controls.target) * 0.02;
-    let vx = 0, vz = 0;
-    if (held.has("d") || held.has("ArrowRight")) vx += 1;
-    if (held.has("a") || held.has("ArrowLeft")) vx -= 1;
-    if (held.has("w") || held.has("ArrowUp")) vz += 1;
-    if (held.has("s") || held.has("ArrowDown")) vz -= 1;
-    panTotal.set(0, 0, 0)
-      .addScaledVector(panRight, vx * step)
-      .addScaledVector(panFwd, vz * step);
-    controls.target.add(panTotal);
+    let vf = 0, vr = 0;
+    if (held.has("w") || held.has("ArrowUp")) vf += 1;
+    if (held.has("s") || held.has("ArrowDown")) vf -= 1;
+    if (held.has("d") || held.has("ArrowRight")) vr += 1;
+    if (held.has("a") || held.has("ArrowLeft")) vr -= 1;
+    const rOld = controls.target.distanceTo(camera.position);
+    steerPos.copy(camera.position)
+      .addScaledVector(steerHor, vf * step)
+      .addScaledVector(steerRight, vr * step);
+    camera.position.copy(steerPos);
+    // keep the orbit distance and aim the pivot along the (steered) heading
+    controls.target.copy(camera.position).addScaledVector(fwd, Math.max(rOld, 0.01));
   }
 
   addEventListener("keydown", (e) => {
@@ -260,6 +299,7 @@
   renderer.domElement.addEventListener("pointermove", (e) => {
     ndc.x = (e.clientX / innerWidth) * 2 - 1;
     ndc.y = -(e.clientY / innerHeight) * 2 + 1;
+    mouseNdc.x = ndc.x; mouseNdc.y = ndc.y;
     raycaster.setFromCamera(ndc, camera);
     const hits = raycaster.intersectObjects(barMeshes, false);
     if (hits.length && hits[0].instanceId != null) {
