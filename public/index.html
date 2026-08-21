@@ -56,7 +56,7 @@
       <input type="text" id="q" placeholder="GitHub username…" autocomplete="off" spellcheck="false" />
       <button id="go">View in 3D</button>
     </div>
-    <span class="hint">drag to rotate · scroll to zoom · hover for details</span>
+    <span class="hint">drag to rotate · scroll to zoom · w/a/s/d or arrows to move · hover for details</span>
   </div>
 
   <div id="scene"></div>
@@ -117,7 +117,7 @@
   const tooltip = document.getElementById("tooltip");
 
   renderer.setAnimationLoop(animate);
-  function animate() { controls.update(); renderer.render(scene, camera); }
+  function animate() { kbPan(); controls.update(); renderer.render(scene, camera); }
 
   function resize() {
     camera.aspect = innerWidth / innerHeight;
@@ -126,6 +126,48 @@
   }
   addEventListener("resize", resize);
   resize();
+
+  // ---- keyboard camera panning (WASD + arrow keys) ----
+  // OrbitControls re-derives camera.position = target + offset on every update(), so
+  // the orbit target is what actually moves the camera. Translating it keeps the spin
+  // and distance intact while the view slides along the horizontal plane.
+  const MOVE_KEYS = new Set(["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+  let held = new Set();
+  const panRight = new THREE.Vector3();
+  const panFwd = new THREE.Vector3();
+  const panTotal = new THREE.Vector3();
+
+  function kbPan() {
+    if (held.size === 0) return;
+    // horizontal direction the camera is looking at (toward its target)
+    panFwd.copy(controls.target).sub(camera.position).setY(0);
+    if (panFwd.length() < 1e-6) return; // looking straight down; nothing to slide along
+    panFwd.normalize();
+    panRight.crossVectors(panFwd, new THREE.Vector3(0, 1, 0)); // perpendicular, horizontal
+    const step = camera.position.distanceTo(controls.target) * 0.02;
+    let vx = 0, vz = 0;
+    if (held.has("d") || held.has("ArrowRight")) vx += 1;
+    if (held.has("a") || held.has("ArrowLeft")) vx -= 1;
+    if (held.has("w") || held.has("ArrowUp")) vz += 1;
+    if (held.has("s") || held.has("ArrowDown")) vz -= 1;
+    panTotal.set(0, 0, 0)
+      .addScaledVector(panRight, vx * step)
+      .addScaledVector(panFwd, vz * step);
+    controls.target.add(panTotal);
+  }
+
+  addEventListener("keydown", (e) => {
+    // let typed text (username search) through without nudging the camera
+    const t = e.target && e.target.tagName;
+    if (t === "INPUT" || t === "TEXTAREA") return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (MOVE_KEYS.has(k)) { held.add(k); e.preventDefault(); }
+  });
+  addEventListener("keyup", (e) => {
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    held.delete(k);
+  });
+  addEventListener("blur", () => held.clear());
 
   // ---- build a continuous single-line timeline (weeks left→right, days top→bottom) ----
   // A fixed Monday-anchored epoch keeps week columns continuous across every year, so
