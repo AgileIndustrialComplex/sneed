@@ -46,7 +46,10 @@
     background:#3d1d1d; border:1px solid #c6534c; color:#ffb4ab; padding:10px 16px;
     border-radius:8px; font-size:14px; display:none; max-width:80%; text-align:center; }
   .hint { color:var(--muted); font-size:12px; }
-  @media (max-width:700px){ .hint{ display:none; } #meta{ min-width:170px; } }
+  #speed { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+  #speed input[type=range] { width:120px; accent-color:var(--green); cursor:pointer; }
+  #speed b { min-width:34px; text-align:right; font-variant-numeric:tabular-nums; color:var(--text); }
+  @media (max-width:700px){ .hint{ display:none; } #meta{ min-width:170px; } #speed{ display:none; } }
 </style>
 </head>
 <body>
@@ -56,7 +59,12 @@
       <input type="text" id="q" placeholder="GitHub username…" autocomplete="off" spellcheck="false" />
       <button id="go">View in 3D</button>
     </div>
-    <span class="hint">drag to rotate · scroll to zoom · w/a/s/d or arrows to move · cursor steers while moving · hover for details</span>
+    <span class="hint">drag to rotate · scroll to zoom · w/a/s/d or arrows to move · cursor steers · hover for details · +/− speed</span>
+    <div id="speed" title="Keyboard movement speed">
+      <label>speed</label>
+      <input type="range" id="speedRange" min="5" max="200" value="20" />
+      <b id="speedVal">0.2×</b>
+    </div>
   </div>
 
   <div id="scene"></div>
@@ -146,6 +154,21 @@
   const EASE = 0.18;   // how quickly the view chases the cursor
   const MIN_PITCH = -0.5;          // look-down floor (radians); default framing already ~ -0.4
   const MAX_PITCH = Math.PI / 2 - 0.05; // never tilt past straight up/overhead
+  let moveSpeed = 0.2;             // × multiplier on the base keyboard travel speed (0.02 of orbit distance/frame)
+  const speedRange = document.getElementById("speedRange");
+  const speedVal = document.getElementById("speedVal");
+  function setSpeed(v, store = true) {
+    moveSpeed = v;
+    speedRange.value = Math.round(v * 100);
+    speedVal.textContent = v.toFixed(1) + "×";
+    if (store) localStorage.setItem("sneed:moveSpeed", String(v));
+  }
+  const storedSpeed = parseFloat(localStorage.getItem("sneed:moveSpeed"));
+  setSpeed(Number.isFinite(storedSpeed) ? Math.min(2, Math.max(0.05, storedSpeed)) : 0.2, false);
+  speedRange.addEventListener("input", () => setSpeed(Number(speedRange.value) / 100));
+
+  // +/- speed hotkeys (also nudge the slider)
+  function nudgeSpeed(d) { setSpeed(Math.min(2, Math.max(0.05, moveSpeed * (d > 0 ? 1.25 : 0.8)))); }
 
   function headingToDir(yaw, pitch) {
     const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch);
@@ -180,7 +203,7 @@
     if (steerHor.lengthSq() < 1e-10) steerHor.set(0, 0, -1); else steerHor.normalize();
     steerRight.crossVectors(steerHor, WORLD_UP);
 
-    const step = camera.position.distanceTo(controls.target) * 0.02;
+    const step = camera.position.distanceTo(controls.target) * 0.02 * moveSpeed;
     let vf = 0, vr = 0;
     if (held.has("w") || held.has("ArrowUp")) vf += 1;
     if (held.has("s") || held.has("ArrowDown")) vf -= 1;
@@ -200,6 +223,8 @@
     const t = e.target && e.target.tagName;
     if (t === "INPUT" || t === "TEXTAREA") return;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (k === "+" || k === "=") { nudgeSpeed(1); e.preventDefault(); return; }
+    if (k === "-" || k === "_") { nudgeSpeed(-1); e.preventDefault(); return; }
     if (MOVE_KEYS.has(k)) { held.add(k); e.preventDefault(); }
   });
   addEventListener("keyup", (e) => {
